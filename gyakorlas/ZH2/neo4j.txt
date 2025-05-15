@@ -1,0 +1,15 @@
+4)
+MATCH (p:Person)-[:ACTED_IN]->(m:Movie)
+WHERE m.released > 1960
+RETURN p.name AS Szereplőneve, m.title AS Filmcíme, m.released AS Megjelenéséve
+ORDER BY m.released DESC
+5)
+MATCH (p:Person)-[:ACTED_IN]->(m:Movie)
+WHERE m.released > 1970 OR m.title CONTAINS 'Love'
+RETURN m.title AS Filmcíme, p.name AS Szereplőneve
+ORDER BY m.title DESC
+6)
+MATCH (p:Person)-[:ACTED_IN]->(m:Movie)
+RETURN m.title AS Filmcíme, count(p) AS Szereplőkszáma
+ORDER BY "Szereplők száma" DESC
+LIMIT 1

@@ -1,0 +1,46 @@
+1) .com végzősés mi jelenjen meg
+db.users.find(
+  { email: /\.com$/i },
+  { name: 1, email: 1, _id: 0 }
+)
+2)
+db.movies.find(
+  {
+    "genres.0": "Short",
+    year: { $gte: 1945, $lte: 1970 }
+  },
+  {
+    title: 1,
+    year: 1,
+    _id: 0
+  }
+).sort({
+  year: 1,
+  title: 1
+})
+3)
+db.movies.aggregate([
+  {
+    $match: {
+      runtime: { $gte: 50, $lte: 100 }
+    }
+  },
+  {
+    $group: {
+      _id: "$year",
+      avg_comments: { $avg: "$num_mflix_comments" }
+    }
+  },
+  {
+    $project: {
+      year: "$_id",
+      avg_comments: 1,
+      _id: 0
+    }
+  },
+  {
+    $sort: {
+      year: 1
+    }
+  }
+])
