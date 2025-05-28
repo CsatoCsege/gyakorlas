@@ -1,0 +1,228 @@
+--1. Készítsen lekérdezést, amely sorszámozza a vendégeket a foglalások száma alapján
+--A sorszám mellett jelenjen meg a vendég szonosítója, neve és foglalások száma is
+--A legtöbbet foglaló vendég kapja az egyes sorszámot
+--Holtversen esetén a számozás annyit ugorjon ahány egyforma árték van
+SELECT 
+    RANK() OVER (ORDER BY COUNT(F.FOGLALAS_PK) DESC) AS Sorszam,
+    V.USERNEV AS VendegID,
+    V.NEV AS VendegNeve,
+    COUNT(F.FOGLALAS_PK) AS FoglalasokSzama
+FROM 
+    Vendeg V
+LEFT JOIN 
+    Foglalas F ON V.USERNEV = F.UGYFEL_FK
+GROUP BY 
+    V.USERNEV, V.NEV
+ORDER BY 
+    FoglalasokSzama DESC;
+--2. Listázzuk azon vendégek nevét, email címét és felhasználó nevét, akik egynél többször foglaltak!
+--Hagyjuk ki azokat a vendégeket, akik május hónapban születtek
+SELECT 
+    V.NEV AS VendegNeve,
+    V.EMAIL AS EmailCim,
+    V.USERNEV AS FelhasznaloNev,
+    COUNT(F.FOGLALAS_PK) AS FoglalasokSzama
+FROM 
+    Vendeg V
+JOIN 
+    Foglalas F ON V.USERNEV = F.UGYFEL_FK
+WHERE 
+    MONTH(V.SZUL_DAT) != 5  -- Májusban születettek kizárása
+GROUP BY 
+    V.USERNEV, V.NEV, V.EMAIL
+HAVING 
+    COUNT(F.FOGLALAS_PK) > 1  -- Csak a több foglalással rendelkezők
+ORDER BY 
+    FoglalasokSzama DESC;
+--3. Listázzuk azon vendégek adatait, akik a legtöbb férőhelyes szobát (vagy szobákat) már lefoglalták!
+--Csak a klímás szoba jöhet számításba
+WITH KlimasSzobakFoglalva AS (
+    SELECT 
+        F.UGYFEL_FK AS VendegID,
+        SUM(S.FEROHELY) AS OsszesFerohely
+    FROM 
+        Foglalas F
+    JOIN 
+        Szoba S ON F.SZOBA_FK = S.SZOBA_ID
+    WHERE 
+        LOWER(TRIM(S.KLIMAS)) IN ('i', 'igen', 'y', 'yes', '1', 'true')  -- Klímás szobák szűrése
+    GROUP BY 
+        F.UGYFEL_FK
+)
+SELECT 
+    V.USERNEV AS FelhasznaloNev,
+    V.NEV AS VendegNeve,
+    V.EMAIL,
+    K.OsszesFerohely
+FROM 
+    KlimasSzobakFoglalva K
+JOIN 
+    Vendeg V ON K.VendegID = V.USERNEV
+WHERE 
+    K.OsszesFerohely = (SELECT MAX(OsszesFerohely) FROM KlimasSzobakFoglalva)
+ORDER BY 
+    V.NEV;
+--4. Listázzuk a szálláshelyek azonosítóját, nevét és helyét!
+-- A listából hagyjuk ki azokat amelynek típusa panzió vagy vendégház
+-- Egy új oszlopban jelenítsük meg, hogy a szálláshely hány napra működik (Hány nap telt el a rögzítás óta)
+SELECT 
+    SZALLAS_ID AS SzallasAzonosito,
+    SZALLAS_NEV AS SzallasNeve,
+    HELY AS Hely,
+    DATEDIFF(day, ROGZ_IDO, GETDATE()) AS MűködésNapjai
+FROM 
+    Szallashely
+WHERE 
+    TIPUS NOT IN ('panzió', 'vendégház')
+ORDER BY 
+    MűködésNapjai DESC;
+--5. Listázzuk "emese" azonosítójú ügyfél foglalásainak azonosítóit és a foglalás kezdetének dátumát!
+--Egy új oszlopban jelenítsük meg hogy mi lenne a foglalás kezdőtátuma ha azt 1 hónappal kásőbbre tolnánk!
+--Az új oszlop neve legyen 'Módosított kezdődátum'
+SELECT 
+    f.FOGLALAS_PK,
+    f.METTOL,
+    DATEADD(MONTH, 1, f.METTOL) AS [Módosított kezdődátum]
+FROM 
+    Foglalas f
+JOIN 
+    Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE 
+    v.USERNEV = 'emese';
+--6. Készítsen lekérdezést amely megjeleníti azon vendégek azonosítóját és nevét, akik 2017 ben többször foglaltak mint 2016-ban
+SELECT 
+    f.UGYFEL_FK, 
+    v.NEV
+FROM 
+    Foglalas f 
+JOIN 
+    Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE 
+    YEAR(f.METTOL) = 2017
+GROUP BY 
+    f.UGYFEL_FK, v.NEV
+HAVING 
+    COUNT(*) > (
+        SELECT COUNT(*) 
+        FROM Foglalas f2 
+        WHERE 
+            YEAR(f2.METTOL) = 2016 
+            AND f2.UGYFEL_FK = f.UGYFEL_FK
+    );
+--7. Készítsen lekérdezést, amely megjelíti, hogy szobánként(SZOBA_FK) hány olyan foglalás történt ahol a felnőttek száma nagyobb volt a gyerekek számánál.
+--A lekérdezés jelenítse meg a végössegeket is megfelelően jelölve
+--A lekérdezés eredménye XML-formátumban jelenjen meg, elemcentrikusan
+SELECT 
+    IIF(GROUPING(SZOBA_FK) = 1, 'Összesen', CAST(SZOBA_FK AS NVARCHAR(10))) AS SZOBA_AZONOSITO,
+    COUNT(*) AS FOGLALASOK_SZAMA
+FROM 
+    Foglalas
+WHERE 
+    FELNOTT_SZAM > GYERMEK_SZAM
+GROUP BY 
+    ROLLUP(SZOBA_FK)
+FOR XML PATH('Foglalas'), ROOT('Foglalasok'), ELEMENTS;
+--8. Listázzuk, hogy szálláshely típusonként, azon belül éves és havi bontásban hány foglalás történt?
+--Az év és hónap megjelítésénél a foglalás tábla METTOL oszlopát használjuk
+--A számolásnál csak a legalább 5 napos foglalásokat vegyük figyelembe
+--Az oszlopokat nevezzük el értelemszerűen
+SELECT 
+    sz.TIPUS AS SzallashelyTipus,
+    YEAR(f.METTOL) AS Ev,
+    MONTH(f.METTOL) AS Honap,
+    COUNT(*) AS FoglalasokSzama
+FROM 
+    Foglalas f
+JOIN 
+    Szoba s ON f.SZOBA_FK = s.SZOBA_ID
+JOIN 
+    Szallashely sz ON s.SZALLAS_FK = sz.SZALLAS_ID
+WHERE 
+    DATEDIFF(DAY, f.METTOL, f.MEDDIG) >= 5
+GROUP BY 
+    sz.TIPUS, YEAR(f.METTOL), MONTH(f.METTOL)
+ORDER BY 
+    sz.TIPUS, Ev, Honap;
+--9. Jelenítsük meg azon ügyfelek nevét akik még sohasem foglalatak vagy volt foglalásuk de nem volt közöttük 2 napnál hosszab!
+-- 1. Azok, akiknek egyáltalán nincs foglalásuk
+SELECT DISTINCT v.NEV
+FROM Foglalas f
+RIGHT JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE f.FOGLALAS_PK IS NULL
+
+UNION
+
+-- 2. Azok, akiknek csak legfeljebb 2 napos foglalásaik voltak
+SELECT v.NEV
+FROM Foglalas f
+JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+GROUP BY v.NEV
+EXCEPT
+SELECT v.NEV
+FROM Foglalas f
+JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE DATEDIFF(DAY, f.METTOL, f.MEDDIG) > 2
+GROUP BY v.NEV;
+--10. Az alábbi lekérdezés kiegészítésével készítsen listát arról hogy melyik ügyfél hányszor foglalt 2015 és 2016 között!
+--A listában az ügyfél neve és a foglalkozások száma jelenjen meg. A listát szűrjük azokra a tételekre ahol a foglalások száma 2-nél több.
+SELECT 
+    v.NEV, 
+    COUNT(*) AS DB
+FROM 
+    Foglalas f
+JOIN 
+    Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE 
+    YEAR(f.METTOL) BETWEEN 2015 AND 2016
+GROUP BY 
+    v.NEV
+HAVING 
+    COUNT(*) > 2;
+--Cassandra datastax
+use "Movies";
+desc tables;
+desc movies_and_tv;
+
+CREATE INDEX i_release_year ON movies_and_tv(release_year);
+SELECT title 
+FROM movies_and_tv 
+WHERE release_year = 2010
+ORDER BY rating DESC
+LIMIT 10
+ALLOW FILTERING;
+--MongoDB Atlas sample_mflix
+--Mely felhasználók email írtak nél több kommntet?
+db.comments.aggregate([
+  {
+    $group: {
+      _id: "$email",
+      commentCount: { $sum: 1 }
+    }
+  },
+  {
+    $match: {
+      commentCount: { $gt: 1 }
+    }
+  },
+  {
+    $sort: {
+      commentCount: -1
+    }
+  }
+])
+--Neo4j SAndbox
+--Azok a személyek  akik nem szerepeltek egy filmben Tom Hanks-sel, egy szereplőneve csak egyszer szereplejen
+MATCH (tom:Person {name: 'Tom Hanks'})-[:ACTED_IN]->(movie:Movie)<-[:ACTED_IN]-(coactor:Person)
+WITH COLLECT(DISTINCT coactor) AS tom_coactors
+MATCH (person:Person)
+WHERE NOT person IN tom_coactors AND person.name <> 'Tom Hanks'
+RETURN DISTINCT person.name
+ORDER BY person.name
+--REDIS CLOUD,Új tábla létrehozása: IRO(ID, nev, nemzetiseg)KONYV(ID, cim,mufaj, IRO_ID)táblánként 2 sor adat
+HSET KONYV:1 ID 1 cim "Harry Potter és a bölcsek köve" mufaj "fantasy" IRO_ID 1
+
+HSET KONYV:2 ID 2 cim "Ragyogás" mufaj "horror" IRO_ID 2
+
+HSET IRO:1 ID 1 nev "J.K. Rowling" nemzetiseg "brit"
+
+HSET IRO:2 ID 2 nev "Stephen King" nemzetiseg "amerikai"
