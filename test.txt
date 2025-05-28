@@ -2,19 +2,16 @@
 --A sorszám mellett jelenjen meg a vendég szonosítója, neve és foglalások száma is
 --A legtöbbet foglaló vendég kapja az egyes sorszámot
 --Holtversen esetén a számozás annyit ugorjon ahány egyforma árték van
+--PARTITION BY
 SELECT 
     RANK() OVER (ORDER BY COUNT(F.FOGLALAS_PK) DESC) AS Sorszam,
     V.USERNEV AS VendegID,
     V.NEV AS VendegNeve,
     COUNT(F.FOGLALAS_PK) AS FoglalasokSzama
-FROM 
-    Vendeg V
-LEFT JOIN 
-    Foglalas F ON V.USERNEV = F.UGYFEL_FK
-GROUP BY 
-    V.USERNEV, V.NEV
-ORDER BY 
-    FoglalasokSzama DESC;
+FROM Vendeg V
+LEFT JOIN Foglalas F ON V.USERNEV = F.UGYFEL_FK
+GROUP BY V.USERNEV, V.NEV
+ORDER BY FoglalasokSzama DESC;
 --2. Listázzuk azon vendégek nevét, email címét és felhasználó nevét, akik egynél többször foglaltak!
 --Hagyjuk ki azokat a vendégeket, akik május hónapban születtek
 SELECT 
@@ -22,45 +19,43 @@ SELECT
     V.EMAIL AS EmailCim,
     V.USERNEV AS FelhasznaloNev,
     COUNT(F.FOGLALAS_PK) AS FoglalasokSzama
-FROM 
-    Vendeg V
-JOIN 
-    Foglalas F ON V.USERNEV = F.UGYFEL_FK
-WHERE 
-    MONTH(V.SZUL_DAT) != 5  -- Májusban születettek kizárása
-GROUP BY 
-    V.USERNEV, V.NEV, V.EMAIL
-HAVING 
-    COUNT(F.FOGLALAS_PK) > 1  -- Csak a több foglalással rendelkezők
-ORDER BY 
-    FoglalasokSzama DESC;
+FROM Vendeg V
+JOIN Foglalas F ON V.USERNEV = F.UGYFEL_FK
+WHERE MONTH(V.SZUL_DAT) != 5
+GROUP BY V.USERNEV, V.NEV, V.EMAIL
+HAVING COUNT(F.FOGLALAS_PK) > 1
+ORDER BY FoglalasokSzama DESC;
 --3. Listázzuk azon vendégek adatait, akik a legtöbb férőhelyes szobát (vagy szobákat) már lefoglalták!
 --Csak a klímás szoba jöhet számításba
-WITH KlimasSzobakFoglalva AS (
+WITH KlimasMaxFerohely AS (
+    SELECT MAX(FEROHELY) AS MaxFerohely
+    FROM Szoba
+    WHERE KLIMAS = 'i'
+),
+MaxFerohelyuKlimasSzobak AS (
+    SELECT SZOBA_ID
+    FROM Szoba
+    WHERE FEROHELY = (SELECT MaxFerohely FROM KlimasMaxFerohely)
+    AND KLIMAS = 'i'
+),
+VendegFoglalasok AS (
     SELECT 
         F.UGYFEL_FK AS VendegID,
-        SUM(S.FEROHELY) AS OsszesFerohely
-    FROM 
-        Foglalas F
-    JOIN 
-        Szoba S ON F.SZOBA_FK = S.SZOBA_ID
-    WHERE 
-        LOWER(TRIM(S.KLIMAS)) IN ('i', 'igen', 'y', 'yes', '1', 'true')  -- Klímás szobák szűrése
-    GROUP BY 
-        F.UGYFEL_FK
+        COUNT(DISTINCT F.SZOBA_FK) AS FoglaltMaxKlimasSzobak
+    FROM Foglalas F
+    JOIN MaxFerohelyuKlimasSzobak M ON F.SZOBA_FK = M.SZOBA_ID
+    GROUP BY F.UGYFEL_FK
 )
 SELECT 
     V.USERNEV AS FelhasznaloNev,
     V.NEV AS VendegNeve,
     V.EMAIL,
-    K.OsszesFerohely
-FROM 
-    KlimasSzobakFoglalva K
-JOIN 
-    Vendeg V ON K.VendegID = V.USERNEV
-WHERE 
-    K.OsszesFerohely = (SELECT MAX(OsszesFerohely) FROM KlimasSzobakFoglalva)
+    VF.FoglaltMaxKlimasSzobak,
+    (SELECT MaxFerohely FROM KlimasMaxFerohely) AS SzobaFerohely
+FROM VendegFoglalasok VF
+JOIN Vendeg V ON VF.VendegID = V.USERNEV
 ORDER BY 
+    VF.FoglaltMaxKlimasSzobak DESC,
     V.NEV;
 --4. Listázzuk a szálláshelyek azonosítóját, nevét és helyét!
 -- A listából hagyjuk ki azokat amelynek típusa panzió vagy vendégház
@@ -70,12 +65,9 @@ SELECT
     SZALLAS_NEV AS SzallasNeve,
     HELY AS Hely,
     DATEDIFF(day, ROGZ_IDO, GETDATE()) AS MűködésNapjai
-FROM 
-    Szallashely
-WHERE 
-    TIPUS NOT IN ('panzió', 'vendégház')
-ORDER BY 
-    MűködésNapjai DESC;
+FROM Szallashely
+WHERE TIPUS NOT IN ('panzió', 'vendégház')
+ORDER BY MűködésNapjai DESC;
 --5. Listázzuk "emese" azonosítójú ügyfél foglalásainak azonosítóit és a foglalás kezdetének dátumát!
 --Egy új oszlopban jelenítsük meg hogy mi lenne a foglalás kezdőtátuma ha azt 1 hónappal kásőbbre tolnánk!
 --Az új oszlop neve legyen 'Módosított kezdődátum'
@@ -83,24 +75,17 @@ SELECT
     f.FOGLALAS_PK,
     f.METTOL,
     DATEADD(MONTH, 1, f.METTOL) AS [Módosított kezdődátum]
-FROM 
-    Foglalas f
-JOIN 
-    Vendeg v ON f.UGYFEL_FK = v.USERNEV
-WHERE 
-    v.USERNEV = 'emese';
+FROM Foglalas f
+JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE v.USERNEV = 'emese';
 --6. Készítsen lekérdezést amely megjeleníti azon vendégek azonosítóját és nevét, akik 2017 ben többször foglaltak mint 2016-ban
 SELECT 
     f.UGYFEL_FK, 
     v.NEV
-FROM 
-    Foglalas f 
-JOIN 
-    Vendeg v ON f.UGYFEL_FK = v.USERNEV
-WHERE 
-    YEAR(f.METTOL) = 2017
-GROUP BY 
-    f.UGYFEL_FK, v.NEV
+FROM Foglalas f 
+JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE YEAR(f.METTOL) = 2017
+GROUP BY f.UGYFEL_FK, v.NEV
 HAVING 
     COUNT(*) > (
         SELECT COUNT(*) 
@@ -115,12 +100,9 @@ HAVING
 SELECT 
     IIF(GROUPING(SZOBA_FK) = 1, 'Összesen', CAST(SZOBA_FK AS NVARCHAR(10))) AS SZOBA_AZONOSITO,
     COUNT(*) AS FOGLALASOK_SZAMA
-FROM 
-    Foglalas
-WHERE 
-    FELNOTT_SZAM > GYERMEK_SZAM
-GROUP BY 
-    ROLLUP(SZOBA_FK)
+FROM Foglalas
+WHERE FELNOTT_SZAM > GYERMEK_SZAM
+GROUP BY ROLLUP(SZOBA_FK)
 FOR XML PATH('Foglalas'), ROOT('Foglalasok'), ELEMENTS;
 --8. Listázzuk, hogy szálláshely típusonként, azon belül éves és havi bontásban hány foglalás történt?
 --Az év és hónap megjelítésénél a foglalás tábla METTOL oszlopát használjuk
@@ -131,18 +113,12 @@ SELECT
     YEAR(f.METTOL) AS Ev,
     MONTH(f.METTOL) AS Honap,
     COUNT(*) AS FoglalasokSzama
-FROM 
-    Foglalas f
-JOIN 
-    Szoba s ON f.SZOBA_FK = s.SZOBA_ID
-JOIN 
-    Szallashely sz ON s.SZALLAS_FK = sz.SZALLAS_ID
-WHERE 
-    DATEDIFF(DAY, f.METTOL, f.MEDDIG) >= 5
-GROUP BY 
-    sz.TIPUS, YEAR(f.METTOL), MONTH(f.METTOL)
-ORDER BY 
-    sz.TIPUS, Ev, Honap;
+FROM Foglalas f
+JOIN Szoba s ON f.SZOBA_FK = s.SZOBA_ID
+JOIN Szallashely sz ON s.SZALLAS_FK = sz.SZALLAS_ID
+WHERE DATEDIFF(DAY, f.METTOL, f.MEDDIG) >= 5
+GROUP BY sz.TIPUS, YEAR(f.METTOL), MONTH(f.METTOL)
+ORDER BY sz.TIPUS, Ev, Honap;
 --9. Jelenítsük meg azon ügyfelek nevét akik még sohasem foglalatak vagy volt foglalásuk de nem volt közöttük 2 napnál hosszab!
 -- 1. Azok, akiknek egyáltalán nincs foglalásuk
 SELECT DISTINCT v.NEV
@@ -168,16 +144,11 @@ GROUP BY v.NEV;
 SELECT 
     v.NEV, 
     COUNT(*) AS DB
-FROM 
-    Foglalas f
-JOIN 
-    Vendeg v ON f.UGYFEL_FK = v.USERNEV
-WHERE 
-    YEAR(f.METTOL) BETWEEN 2015 AND 2016
-GROUP BY 
-    v.NEV
-HAVING 
-    COUNT(*) > 2;
+FROM Foglalas f
+JOIN Vendeg v ON f.UGYFEL_FK = v.USERNEV
+WHERE YEAR(f.METTOL) BETWEEN 2015 AND 2016
+GROUP BY v.NEV
+HAVING COUNT(*) > 2;
 --Cassandra datastax
 use "Movies";
 desc tables;
